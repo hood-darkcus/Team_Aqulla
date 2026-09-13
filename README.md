@@ -5,7 +5,7 @@ A real-time, physics-informed AI backend designed to monitor structural integrit
 ## 🚀 Features
 
 * **Real-Time Telemetry Ingestion:** Uses `Paho-MQTT` to instantly ingest pitch, roll, and flex resistance data from distributed ESP32/LoRa sensor nodes.
-* **Physics-Informed Prediction:** Using saito teriteary creep graph based regression model to predict time for failure and danger levels
+* **Physics-Informed Prediction:** Using saito teritiary creep graph based regression model to predict time for failure and danger levels
 * **Live Dashboard Streaming:** Utilizes a FastAPI and mqtt manager to broadcast parsed kinematics, Danger Level (0-100%), and TTF directly to the frontend.
 * **Noise Filtration:** Implements rolling moving averages, 1-second velocity tripwires, and macro-acceleration gates to mathematically eliminate sensor hallucinations during primary and secondary creep phases.
 
