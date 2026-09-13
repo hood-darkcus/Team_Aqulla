@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subsidence Simulator Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --danger: #ef4444;
+            --safe: #22c55e;
+            --warning: #eab308;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 2rem;
+            background: linear-gradient(90deg, #60a5fa, #a78bfa);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            width: 100%;
+            max-width: 1000px;
+        }
+
+        .card {
+            background-color: var(--panel-bg);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: transform 0.2s;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+        }
+
+        .card-title {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+
+        .card-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-top: auto;
+        }
+
+        .status-safe { color: var(--safe); }
+        .status-warning { color: var(--warning); }
+        .status-danger { color: var(--danger); text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+
+        /* Cardboard Visualizer */
+        .visualizer-card {
+            grid-column: 1 / -1;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .cardboard-container {
+            width: 80%;
+            height: 150px;
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+        }
+
+        .wall {
+            width: 40px;
+            height: 100px;
+            background: #334155;
+            position: absolute;
+            top: 20px;
+            border-radius: 4px;
+        }
+
+        .wall.left { left: 0; }
+        .wall.right { right: 0; }
+
+        .cardboard-beam-svg {
+            width: calc(100% - 40px);
+            height: 150px;
+            position: absolute;
+            top: 20px;
+            overflow: visible;
+        }
+
+        .connection-status {
+            margin-top: 2rem;
+            padding: 0.5rem 1rem;
+            border-radius: 999px;
+            font-size: 0.875rem;
+            background: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            border: 1px solid #f87171;
+        }
+
+        .connected {
+            background: rgba(34, 197, 94, 0.2);
+            color: #86efac;
+            border: 1px solid #4ade80;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>SUBSIDENCE TELEMETRY</h1>
+
+    <div class="dashboard">
+        <div class="card">
+            <div class="card-title">Danger Level</div>
+            <div class="card-value" id="dangerLevel">0%</div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">Time to Failure</div>
+            <div class="card-value" id="ttf">-- s</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Macro Strain</div>
+            <div class="card-value" id="macroStrain">0.0000</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Micro Strain Node 1</div>
+            <div class="card-value" id="microStrain1">0.0000</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Micro Strain Node 2</div>
+            <div class="card-value" id="microStrain2">0.0000</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Macro Acceleration</div>
+            <div class="card-value" id="accel">0.0000</div>
+        </div>
+
+        <div class="card visualizer-card">
+            <div class="card-title">Live Physical Representation</div>
+            <div class="cardboard-container">
+                <div class="wall left"></div>
+                <svg class="cardboard-beam-svg" id="beamSvg" viewBox="0 0 1000 150" preserveAspectRatio="none">
+                    <defs>
+                        <linearGradient id="beamGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#d4a373" id="stop1"/>
+                            <stop offset="100%" stop-color="#faedcd" id="stop2"/>
+                        </linearGradient>
+                    </defs>
+                    <path id="beamPath" d="M 0 20 Q 500 20 1000 20" stroke="#d4a373" stroke-width="20" fill="transparent" stroke-linecap="round"/>
+                </svg>
+                <div class="wall right"></div>
+            </div>
+            <div style="margin-top: 1rem; color: var(--text-muted); font-size: 0.85rem;">Mock Node 1 (Center) &nbsp;|&nbsp; Mock Node 2 (Edge)</div>
+        </div>
+    </div>
+
+    <div class="connection-status" id="status">Connecting to Backend...</div>
+
+    <script>
+        const ws = new WebSocket("ws://localhost:8000/ws/frontend");
+        
+        const dangerEl = document.getElementById('dangerLevel');
+        const ttfEl = document.getElementById('ttf');
+        const macroStrainEl = document.getElementById('macroStrain');
+        const strain1El = document.getElementById('microStrain1');
+        const strain2El = document.getElementById('microStrain2');
+        const accelEl = document.getElementById('accel');
+        const statusEl = document.getElementById('status');
+        const beamPath = document.getElementById('beamPath');
+        const stop1 = document.getElementById('stop1');
+        const stop2 = document.getElementById('stop2');
+
+        ws.onopen = () => {
+            statusEl.textContent = "Connected to FastApi Brain";
+            statusEl.classList.add("connected");
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = "Disconnected. Is backend running?";
+            statusEl.classList.remove("connected");
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            // 1. Update text values
+            const danger = data.danger_level || 0;
+            dangerEl.textContent = danger.toFixed(1) + "%";
+            
+            if (danger < 30) dangerEl.className = "card-value status-safe";
+            else if (danger < 75) dangerEl.className = "card-value status-warning";
+            else dangerEl.className = "card-value status-danger";
+
+            if (data.time_to_failure_s) {
+                ttfEl.textContent = data.time_to_failure_s.toFixed(1) + " s";
+            } else {
+                ttfEl.textContent = danger >= 100 ? "FAILED" : "-- s";
+            }
+
+            macroStrainEl.textContent = (data.macro_strain_live || 0).toFixed(5);
+            strain1El.textContent = (data.micro_strain_node1 || data.micro_strain_live || 0).toFixed(5);
+            strain2El.textContent = (data.micro_strain_node2 || data.micro_strain_live || 0).toFixed(5);
+            accelEl.textContent = (data.macro_acceleration || 0).toFixed(6);
+
+            // 2. Animate the Cardboard Visual
+            // We use the danger_level (0 to 100) to simulate the bending of the beam.
+            // As danger approaches 100, the beam dips down in the center using CSS border-radius and height.
+            let bendIntensity = danger / 100; // 0.0 to 1.0
+            
+            // Maximum dip height
+            let maxDip = 80; // pixels
+            let currentDip = maxDip * bendIntensity;
+            
+            // Apply a curve to the SVG path to simulate bending
+            beamPath.setAttribute("d", `M 0 20 Q 500 ${20 + currentDip * 2} 1000 20`);
+            
+            // Change color to red as it fails
+            if (bendIntensity > 0.8) {
+                stop1.setAttribute("stop-color", "#ef4444");
+                stop2.setAttribute("stop-color", "#ef4444");
+            } else {
+                stop1.setAttribute("stop-color", "#d4a373");
+                stop2.setAttribute("stop-color", "#faedcd");
+            }
+        };
+    </script>
+</body>
+</html>

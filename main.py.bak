@@ -1,0 +1,335 @@
+import asyncio
+import json
+import time
+import math
+import threading
+import numpy as np
+from collections import deque
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+from scipy.optimize import curve_fit
+from scipy.signal import savgol_filter
+import paho.mqtt.client as mqtt
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+
+
+# --- Background Task Setup ---
+optimization_task = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global optimization_task
+    # Startup: Initialize MQTT Client
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+    mqtt_client.on_message = on_message
+    
+    try:
+        mqtt_client.connect("localhost", 1883, 60)
+        mqtt_client.subscribe("mine/telemetry")
+        mqtt_client.loop_start()
+        print("MQTT Client connected and loop started.")
+    except Exception as e:
+        print(f"Failed to connect to MQTT broker: {e}")
+        
+    # Start the background physics-informed ML loop
+    optimization_task = asyncio.create_task(optimization_loop())
+    
+    yield
+    
+    # Teardown: Graceful shutdown
+    if optimization_task:
+        optimization_task.cancel()
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print("MQTT Client disconnected and ML loop stopped.")
+
+app = FastAPI(title="Mine Subsidence Prediction Brain", lifespan=lifespan)
+
+# --- Configuration & State ---
+class ConfigModel(BaseModel):
+    H: float = 0.004
+    E_max: float = 0.04
+    extraction_rate: float = 0.2
+    distance_x: float = 0.20
+    flex_baseline: float = 10000.0
+    flex_multiplier: float = 0.002
+
+# Global configuration variables
+app_config = {
+    "H": 0.004,              # 4mm cardboard thickness
+    "E_max": 0.04,          # Cardboard creases at ~4% strain
+    "extraction_rate": 0.2, # 5-10 second balloon deflation rate
+    "distance_x": 0.20,     # 20cm between Node 1 (center) and Node 2 (edge)
+    "flex_baseline": 10000.0, # Baseline resistance (measure this!)
+    "flex_multiplier": 0.002  # Standard hardware calibration multiplier
+}
+
+# Async rolling buffer for the last 100 sensor readings
+BUFFER_SIZE = 100
+sensor_buffer = deque(maxlen=BUFFER_SIZE)
+buffer_lock = threading.Lock()
+
+# Threshold for macro-acceleration trigger (Rescaled for radians and H/2 formulation)
+ACCEL_THRESHOLD = 0.0001
+
+# Global dictionary to cache the latest values for both nodes
+current_sensor_state = {
+    1: {"total_tilt": 0.0, "flex_resistance": 0.0, "last_time": 0.0},
+    2: {"total_tilt": 0.0, "flex_resistance": 0.0, "last_time": 0.0}
+}
+
+# --- WebSocket Managers ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        dead = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                # Connection dropped mid-broadcast
+                dead.append(connection)
+        
+        # Clean up stale connections safely
+        for d in dead:
+            self.disconnect(d)
+
+frontend_manager = ConnectionManager()
+
+# --- MQTT Setup ---
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload.decode())
+        node_id = payload.get("node_id")
+        
+        if node_id in current_sensor_state:
+            pitch = float(payload.get("pitch_angle", 0.0))
+            roll = float(payload.get("roll_angle", 0.0))
+            flex_resistance = float(payload.get("flex_resistance", 0.0))
+            
+            # Calculate true spatial tilt
+            total_tilt = math.sqrt(pitch**2 + roll**2)
+            
+            # Update global dictionary
+            current_sensor_state[node_id]["total_tilt"] = total_tilt
+            current_sensor_state[node_id]["flex_resistance"] = flex_resistance
+            current_sensor_state[node_id]["last_time"] = time.time()
+            
+            # Synchrony check: Wait for both nodes to report within a 200ms window
+            t1 = current_sensor_state[1].get("last_time", 0)
+            t2 = current_sensor_state[2].get("last_time", 0)
+            
+            if t1 > 0 and t2 > 0 and abs(t1 - t2) <= 0.2:
+                # Snapshot the merged state
+                merged_snapshot = {
+                    "timestamp": time.time(),
+                    "node1_tilt": current_sensor_state[1]["total_tilt"],
+                    "node1_flex_resistance": current_sensor_state[1]["flex_resistance"],
+                    "node2_tilt": current_sensor_state[2]["total_tilt"],
+                    "node2_flex_resistance": current_sensor_state[2]["flex_resistance"]
+                }
+                with buffer_lock:
+                    sensor_buffer.append(merged_snapshot)
+                
+                # Reset timers to await next fresh pair
+                current_sensor_state[1]["last_time"] = 0.0
+                current_sensor_state[2]["last_time"] = 0.0
+        
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        print(f"Invalid MQTT sensor data received: {e}")
+
+# --- AI Optimization Loop ---
+def exponential_strain_curve(t, strain_0, B, k):
+    """
+    Tertiary Creep Exponential Curve
+    Strain(t) = strain_0 + B * exp(k * t)
+    (Mathematically simplified from A * exp(k * (t - t_onset)) to prevent degeneracy)
+    """
+    return strain_0 + B * np.exp(np.clip(k * t, -100, 100))
+
+async def optimization_loop():
+    while True:
+        await asyncio.sleep(1.0) # Run evaluation periodically
+        
+        # Enforce minimum buffer size
+        with buffer_lock:
+            if len(sensor_buffer) < 15:
+                continue
+
+            # Snapshot the buffer safely
+            raw_data = list(sensor_buffer)
+        
+        # Filter duplicate timestamps to prevent Division By Zero in np.gradient
+        data = []
+        last_ts = 0.0
+        for d in raw_data:
+            if d["timestamp"] - last_ts > 1e-3: # At least 1ms apart
+                data.append(d)
+                last_ts = d["timestamp"]
+                
+        if len(data) < 15:
+            continue
+        
+        # Extract arrays
+        timestamps = np.array([d["timestamp"] for d in data])
+        tilt1_array = np.array([d["node1_tilt"] for d in data])
+        tilt2_array = np.array([d["node2_tilt"] for d in data])
+        flex1_res_array = np.array([d["node1_flex_resistance"] for d in data])
+        
+        H = app_config["H"]
+        E_max = app_config["E_max"]
+        extraction_rate = app_config["extraction_rate"]
+        distance_x = app_config["distance_x"]
+        
+        # 1. Macro-Strain Calculation (Corrected Math: Radians and H/2)
+        dist_x_safe = distance_x if distance_x > 0 else 1.0 
+        tilt_diff_rad = np.abs(tilt1_array - tilt2_array) * (np.pi / 180.0)
+        macro_curvature_array = tilt_diff_rad / dist_x_safe
+        macro_strain_array = (H / 2.0) * macro_curvature_array
+        
+        # 2. Apply Savitzky-Golay to Macro-Strain to reduce noise amplification
+        macro_window_size = min(15, len(macro_strain_array))
+        macro_window_size = max(5, macro_window_size)
+        if macro_window_size % 2 == 0:
+            macro_window_size += 1
+            
+        try:
+            smoothed_macro_strain = savgol_filter(macro_strain_array, window_length=macro_window_size, polyorder=2)
+        except ValueError:
+            smoothed_macro_strain = macro_strain_array
+            
+        # Kinematic Acceleration
+        macro_velocity = np.gradient(smoothed_macro_strain, timestamps)
+        macro_acceleration = np.gradient(macro_velocity, timestamps)
+        
+        danger_level = 0.0
+        time_to_failure = None
+        
+        # 3. Calculate micro-strain localized at Node 1 (ALWAYS calculcated to prevent UI drops)
+        micro_strain_array = H * app_config["flex_multiplier"] * (flex1_res_array - app_config["flex_baseline"])
+        
+        # Apply dynamic savgol_filter STRICTLY to micro strain array
+        micro_window_size = min(15, len(micro_strain_array))
+        micro_window_size = max(5, micro_window_size)
+        if micro_window_size % 2 == 0:
+            micro_window_size += 1
+            
+        try:
+            smoothed_micro_strain = savgol_filter(micro_strain_array, window_length=micro_window_size, polyorder=2)
+        except ValueError:
+            smoothed_micro_strain = micro_strain_array
+            
+        current_micro_strain = smoothed_micro_strain[-1]
+        
+        # Trigger condition for AI prediction
+        if macro_acceleration[-1] > ACCEL_THRESHOLD:
+            # Normalize time relative to the first point
+            t_data = timestamps - timestamps[0]
+            strain_data = smoothed_micro_strain
+            
+            k_guess = extraction_rate
+            # p0: [strain_0, B, k]
+            p0 = [strain_data[0], 0.001, k_guess]
+            
+            strain_0_opt, B_opt, k_opt = 0.0, 0.0, 0.0
+            
+            try:
+                bounds = ([-np.inf, 0, 0], [np.inf, np.inf, np.inf])
+                
+                # Execute CPU-bound curve_fit in a separate thread so WebSocket event loop isn't blocked
+                popt, _ = await asyncio.to_thread(
+                    curve_fit,
+                    exponential_strain_curve, 
+                    t_data, 
+                    strain_data, 
+                    p0=p0, 
+                    bounds=bounds,
+                    maxfev=2000
+                )
+                strain_0_opt, B_opt, k_opt = popt
+                
+            except RuntimeError:
+                # Log-Linear Regression Fallback for non-convergence
+                strain_0_opt = np.min(strain_data) - 1e-6
+                # Avoid log(0) or negative numbers
+                y_lin = np.log(np.maximum(strain_data - strain_0_opt, 1e-9))
+                # ln(strain - strain_0) = ln(B) + k*t
+                # Linear fit: y = k*x + c
+                coeffs = np.polyfit(t_data, y_lin, 1)
+                k_opt = max(coeffs[0], 1e-6) # force positive k if decaying
+                B_opt = np.exp(coeffs[1])
+            except Exception as e:
+                print(f"Optimization loop skipped: {e}")
+                continue
+                
+            # Solve for t_failure: E_max = strain_0 + B * exp(k * t)
+            # Guard against division by zero and ground already failed!
+            if current_micro_strain >= E_max or strain_0_opt >= E_max:
+                danger_level = 100.0
+                time_to_failure = 0.0
+            elif B_opt > 1e-9 and k_opt > 0:
+                term = (E_max - strain_0_opt) / B_opt
+                
+                if term > 0:
+                    t_failure_rel = math.log(term) / k_opt
+                    t_failure_abs = timestamps[0] + t_failure_rel
+                    
+                    time_to_failure = t_failure_abs - time.time()
+                    
+                    if time_to_failure <= 0:
+                        danger_level = 100.0
+                    else:
+                        if time_to_failure <= 10:
+                            danger_level = 100.0
+                        elif time_to_failure >= 3600:
+                            danger_level = 0.0
+                        else:
+                            val = math.log(time_to_failure / 10.0) / math.log(3600.0 / 10.0)
+                            danger_level = max(0.0, min(100.0, 100.0 * (1 - val)))
+                            
+        # Send processed data to React frontend
+        frontend_payload = {
+            "timestamp": time.time(),
+            "macro_acceleration": round(macro_acceleration[-1], 6),
+            "micro_strain_live": round(current_micro_strain, 6),
+            "danger_level": round(danger_level, 2),
+            "time_to_failure_s": round(time_to_failure, 2) if time_to_failure is not None and time_to_failure > 0 else None
+        }
+        await frontend_manager.broadcast(frontend_payload)
+
+# --- FastAPI Routes ---
+
+@app.post("/config")
+async def update_config(config: ConfigModel):
+    app_config["H"] = config.H
+    app_config["E_max"] = config.E_max
+    app_config["extraction_rate"] = config.extraction_rate
+    app_config["distance_x"] = config.distance_x
+    app_config["flex_baseline"] = config.flex_baseline
+    app_config["flex_multiplier"] = config.flex_multiplier
+    return {"message": "Configuration updated successfully", "current_config": app_config}
+
+@app.websocket("/ws/frontend")
+async def websocket_frontend(websocket: WebSocket):
+    await frontend_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        frontend_manager.disconnect(websocket)
+
+@app.get("/")
+async def get_dashboard():
+    return FileResponse("dashboard.html")

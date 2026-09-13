@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mine Subsidence Monitor</title>
+    <!-- Include Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* CSS matching the image */
+        :root {
+            --bg: #f5f4ef;
+            --card-bg: #ffffff;
+            --text-dark: #1e293b;
+            --text-gray: #64748b;
+            --red-main: #d32f2f;
+            --red-light: #ffcdd2;
+            --green-main: #388e3c;
+            --blue-btn: #1976d2;
+            --border-radius: 8px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 40px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .title-area h1 {
+            margin: 0 0 5px 0;
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .title-area p {
+            margin: 0;
+            font-size: 12px;
+            color: var(--text-gray);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .btn-reset {
+            background-color: var(--blue-btn);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-gray);
+            background: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--green-main);
+            border-radius: 50%;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: var(--border-radius);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        /* Top critical card */
+        .top-card {
+            border-left: 6px solid var(--red-main);
+            position: relative;
+        }
+
+        .progress-bar {
+            display: flex;
+            gap: 2px;
+            height: 8px;
+            margin-bottom: 20px;
+        }
+        .progress-segment {
+            flex: 1;
+            background-color: var(--red-main);
+            border-radius: 2px;
+        }
+
+        .top-card-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .critical-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .critical-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--red-main);
+            font-weight: bold;
+            font-size: 24px;
+        }
+        .critical-box span { font-size: 40px; }
+        .critical-box sub { font-size: 14px; color: var(--text-gray); }
+
+        .prediction-text {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .prediction-text strong { font-size: 16px; }
+        .prediction-text span { font-size: 12px; color: var(--text-gray); }
+
+        .metrics-section {
+            display: flex;
+            gap: 30px;
+            text-align: right;
+        }
+
+        .metric {
+            display: flex;
+            flex-direction: column;
+        }
+        .metric-label { font-size: 10px; color: var(--text-gray); text-transform: lowercase; }
+        .metric-val { font-size: 16px; font-weight: bold; font-family: monospace; }
+
+        .model-params {
+            margin-top: 20px;
+            font-size: 12px;
+            color: var(--text-gray);
+            cursor: pointer;
+            border-top: 1px solid #f1f5f9;
+            padding-top: 10px;
+        }
+
+        /* Node toggles */
+        .node-toggles {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .node-btn {
+            background: white;
+            border: 1px solid #e2e8f0;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--text-gray);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .node-btn.active {
+            border-color: #cbd5e1;
+            color: var(--text-dark);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .node-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .dot-red { background-color: var(--red-main); }
+        .dot-green { background-color: var(--green-main); }
+
+        /* Anomaly banner */
+        .anomaly-banner {
+            border-left: 6px solid var(--red-main);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+        }
+        
+        .anomaly-text {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .anomaly-text h2 {
+            margin: 0;
+            color: var(--red-main);
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .anomaly-desc {
+            font-size: 14px;
+        }
+
+        .network-stats {
+            display: flex;
+            gap: 20px;
+            text-align: right;
+        }
+        .net-stat {
+            display: flex;
+            flex-direction: column;
+        }
+        .net-stat-label { font-size: 10px; color: var(--text-gray); }
+        .net-stat-val { font-size: 16px; font-weight: bold; }
+
+        /* Charts area */
+        .charts-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .chart-card {
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 10px;
+        }
+        .chart-title {
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--text-dark);
+        }
+        .chart-current {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--red-main);
+            font-family: monospace;
+        }
+        .chart-current small {
+            font-size: 12px;
+            color: var(--text-gray);
+        }
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            height: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title-area">
+            <h1>Mine Subsidence Monitor</h1>
+            <p>Surface mesh • live sensor feed • rule-based alerting • creep-model prediction</p>
+        </div>
+        <div class="header-actions">
+            <button class="btn-reset">⟲ Reset demo</button>
+            <div class="live-indicator">
+                <div class="dot" id="connDot"></div> <span id="connText">live</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card top-card">
+        <div class="progress-bar">
+            <div class="progress-segment"></div>
+            <div class="progress-segment"></div>
+            <div class="progress-segment"></div>
+            <div class="progress-segment"></div>
+        </div>
+        <div class="top-card-content">
+            <div class="critical-section">
+                <div class="critical-box">
+                    ■ <span id="dangerLevelVal" style="color:var(--red-main)">CRITICAL</span> <span id="dangerScore">100</span><sub>/100</sub>
+                </div>
+                <div class="prediction-text">
+                    <strong>predicted subsidence in <span id="ttfVal" style="color:inherit;font-size:inherit;font-weight:bold;">now</span></strong>
+                    <span>CRITICAL: strain at or above E_max</span>
+                </div>
+            </div>
+            <div class="metrics-section">
+                <div class="metric">
+                    <span class="metric-label">macro strain</span>
+                    <span class="metric-val" id="macroVal">0.00000</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">accel</span>
+                    <span class="metric-val" id="accelVal">0.00e0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">micro strain</span>
+                    <span class="metric-val" id="microVal">0.00000</span>
+                </div>
+            </div>
+        </div>
+        <div class="model-params">
+            ▶ Model parameters
+        </div>
+    </div>
+
+    <div class="node-toggles">
+        <button class="node-btn active" id="btnNodeA" onclick="setNode(1)">
+            <div class="node-dot dot-red"></div> Node A
+        </button>
+        <button class="node-btn" id="btnNodeB" onclick="setNode(2)">
+            <div class="node-dot dot-green"></div> Node B
+        </button>
+    </div>
+
+    <div class="card anomaly-banner">
+        <div class="anomaly-text">
+            <h2>▲ ANOMALY</h2>
+            <div class="anomaly-desc">Node <span id="anomalyNodeName">A</span>: threshold crossed on <strong>tilt, flex/stretch</strong>.</div>
+        </div>
+        <div class="network-stats">
+            <div class="net-stat">
+                <span class="net-stat-label">seq</span>
+                <span class="net-stat-val" id="seqNo">1606</span>
+            </div>
+            <div class="net-stat">
+                <span class="net-stat-label">received</span>
+                <span class="net-stat-val" id="recvNo">252</span>
+            </div>
+            <div class="net-stat">
+                <span class="net-stat-label">dropped</span>
+                <span class="net-stat-val">0</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="charts-container">
+        <div class="card chart-card">
+            <div class="chart-header">
+                <div class="chart-title">Tilt (magnitude)</div>
+                <div class="chart-current" id="tiltCurrent">0.00 <small>°</small></div>
+            </div>
+            <div class="canvas-container">
+                <canvas id="tiltChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card chart-card">
+            <div class="chart-header">
+                <div class="chart-title">Flex / stretch</div>
+                <div class="chart-current" id="flexCurrent">0 <small>ADC</small></div>
+            </div>
+            <div class="canvas-container">
+                <canvas id="flexChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let activeNode = 1;
+        let seq = 1606;
+        let recv = 252;
+        
+        // Data buffers for charts (max 60 points)
+        const maxPoints = 60;
+        
+        const chartData = {
+            1: { tilt: [], flex: [], labels: [] },
+            2: { tilt: [], flex: [], labels: [] }
+        };
+
+        // Initialize empty arrays
+        for(let i=0; i<maxPoints; i++) {
+            chartData[1].labels.push('');
+            chartData[1].tilt.push(null);
+            chartData[1].flex.push(null);
+            chartData[2].labels.push('');
+            chartData[2].tilt.push(null);
+            chartData[2].flex.push(null);
+        }
+
+        // Chart.js Configuration
+        const commonOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+                x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 5 } },
+                y: { display: true, grid: { color: '#f1f5f9' }, position: 'left' }
+            },
+            elements: { point: { radius: 0 }, line: { borderWidth: 2, tension: 0.1 } }
+        };
+
+        const ctxTilt = document.getElementById('tiltChart').getContext('2d');
+        const tiltChart = new Chart(ctxTilt, {
+            type: 'line',
+            data: {
+                labels: chartData[1].labels,
+                datasets: [{
+                    data: chartData[1].tilt,
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'transparent',
+                }]
+            },
+            options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, min: 0, max: 90 } } }
+        });
+
+        const ctxFlex = document.getElementById('flexChart').getContext('2d');
+        const flexChart = new Chart(ctxFlex, {
+            type: 'line',
+            data: {
+                labels: chartData[1].labels,
+                datasets: [{
+                    data: chartData[1].flex,
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'transparent',
+                }]
+            },
+            options: commonOptions
+        });
+
+        function formatTime(d) {
+            return d.getHours().toString().padStart(2,'0') + ':' + 
+                   d.getMinutes().toString().padStart(2,'0') + ':' + 
+                   d.getSeconds().toString().padStart(2,'0');
+        }
+
+        function setNode(node) {
+            activeNode = node;
+            document.getElementById('btnNodeA').className = 'node-btn' + (node === 1 ? ' active' : '');
+            document.getElementById('btnNodeB').className = 'node-btn' + (node === 2 ? ' active' : '');
+            document.getElementById('anomalyNodeName').innerText = node === 1 ? 'A' : 'B';
+            
+            // Update charts
+            tiltChart.data.datasets[0].data = chartData[node].tilt;
+            tiltChart.data.labels = chartData[node].labels;
+            tiltChart.update();
+            
+            flexChart.data.datasets[0].data = chartData[node].flex;
+            flexChart.data.labels = chartData[node].labels;
+            flexChart.update();
+        }
+
+        // WebSocket connection
+        const ws = new WebSocket("ws://localhost:8000/ws/frontend");
+        const connDot = document.getElementById('connDot');
+        const connText = document.getElementById('connText');
+
+        ws.onopen = () => {
+            connDot.style.backgroundColor = 'var(--green-main)';
+            connText.innerText = 'live';
+        };
+
+        ws.onclose = () => {
+            connDot.style.backgroundColor = 'var(--red-main)';
+            connText.innerText = 'offline';
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            // Update Top Metrics
+            document.getElementById('macroVal').innerText = data.macro_strain_live ? data.macro_strain_live.toFixed(5) : '0.00000';
+            document.getElementById('accelVal').innerText = data.macro_acceleration ? data.macro_acceleration.toExponential(2) : '0.00e0';
+            
+            // Select appropriate micro strain
+            let ms = activeNode === 1 ? data.micro_strain_node1 : data.micro_strain_node2;
+            document.getElementById('microVal').innerText = ms ? ms.toFixed(5) : '0.00000';
+
+            // Danger level
+            let dl = data.danger_level || 0;
+            document.getElementById('dangerScore').innerText = Math.round(dl);
+            
+            let statusText = dl >= 99 ? 'CRITICAL' : (dl > 30 ? 'WARNING' : 'SAFE');
+            let statusColor = dl >= 99 ? 'var(--red-main)' : (dl > 30 ? '#eab308' : 'var(--green-main)');
+            
+            let elDL = document.getElementById('dangerLevelVal');
+            elDL.innerText = statusText;
+            elDL.style.color = statusColor;
+            
+            // Show anomaly only if danger > 70
+            let anomalyBanner = document.querySelector('.anomaly-banner');
+            if (dl > 70) {
+                anomalyBanner.style.display = 'flex';
+            } else {
+                anomalyBanner.style.display = 'none';
+            }
+
+            if(data.time_to_failure_s) {
+                document.getElementById('ttfVal').innerText = data.time_to_failure_s.toFixed(1) + 's';
+            } else {
+                document.getElementById('ttfVal').innerText = dl >= 99 ? 'now' : '--';
+            }
+
+            // Update networking mock stats
+            seq++;
+            recv++;
+            document.getElementById('seqNo').innerText = seq;
+            document.getElementById('recvNo').innerText = recv;
+
+            // Update Chart Buffers
+            let nowTime = formatTime(new Date());
+            
+            // Node 1
+            chartData[1].labels.push(nowTime);
+            chartData[1].labels.shift();
+            chartData[1].tilt.push(data.node1_tilt || 0);
+            chartData[1].tilt.shift();
+            chartData[1].flex.push(data.node1_flex || 0);
+            chartData[1].flex.shift();
+
+            // Node 2
+            chartData[2].labels.push(nowTime);
+            chartData[2].labels.shift();
+            chartData[2].tilt.push(data.node2_tilt || 0);
+            chartData[2].tilt.shift();
+            chartData[2].flex.push(data.node2_flex || 0);
+            chartData[2].flex.shift();
+
+            // Update Active UI
+            let activeTilt = chartData[activeNode].tilt[chartData[activeNode].tilt.length - 1];
+            let activeFlex = chartData[activeNode].flex[chartData[activeNode].flex.length - 1];
+            
+            if (activeTilt !== null) {
+                document.getElementById('tiltCurrent').innerHTML = activeTilt.toFixed(2) + ' <small>°</small>';
+            }
+            if (activeFlex !== null) {
+                document.getElementById('flexCurrent').innerHTML = activeFlex.toFixed(0) + ' <small>ADC</small>';
+            }
+
+            tiltChart.update();
+            flexChart.update();
+        };
+    </script>
+</body>
+</html>
