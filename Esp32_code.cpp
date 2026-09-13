@@ -7,7 +7,7 @@
 
 const char *WIFI_SSID = "HOODHLGN";
 const char *WIFI_PASSWORD = "password";
-const char *MQTT_SERVER = "192.168.137.1";
+const char *MQTT_SERVER = "192.168.xxx";
 const int NODE_ID = 2;
 
 const int MPU_ADDR = 0x68;
